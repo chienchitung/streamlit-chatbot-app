@@ -3,11 +3,13 @@ import requests
 import json
 from datetime import datetime
 import os
+import time
 
 class ChatApp:
     def __init__(self):
         self.setup_streamlit()
         self.initialize_state()
+        self.setup_ollama_connection()
         self.available_models = self.get_available_models()
 
     def setup_streamlit(self):
@@ -29,17 +31,56 @@ class ChatApp:
         if "num_threads" not in st.session_state:
             st.session_state.num_threads = 4
 
+    def setup_ollama_connection(self):
+        """設置 Ollama 連接"""
+        self.ollama_base_url = os.getenv('OLLAMA_API_BASE_URL', 'http://localhost:11434')
+        if not self.ollama_base_url:
+            st.error("未設置 OLLAMA_API_BASE_URL 環境變數")
+            return
+        
+        # 移除不需要的設置，因為我們使用 ngrok URL
+        # self.ollama_host = os.getenv('OLLAMA_HOST', 'localhost')
+        # self.ollama_port = os.getenv('OLLAMA_PORT', '11434')
+
     def get_available_models(self):
         """獲取可用的 Ollama 模型列表"""
         try:
-            response = requests.get(
-                "http://localhost:11434/api/tags",
-                timeout=5
-            )
-            if response.status_code == 200:
-                models = [model["name"] for model in response.json()["models"]]
-                return models
+            api_url = f"{self.ollama_base_url}/api/tags"
+            
+            # 添加 ngrok 所需的標頭
+            headers = {
+                'Content-Type': 'application/json',
+                'ngrok-skip-browser-warning': 'true',
+                'User-Agent': 'Mozilla/5.0'
+            }
+            
+            max_retries = 3
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                try:
+                    response = requests.get(
+                        api_url,
+                        headers=headers,  # 使用新的標頭
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        models = [model["name"] for model in response.json()["models"]]
+                        return models
+                    retry_count += 1
+                except requests.exceptions.ConnectionError:
+                    st.warning(f"連接到 Ollama 服務失敗 (嘗試 {retry_count + 1}/{max_retries})")
+                    time.sleep(2)
+                    retry_count += 1
+            
+            st.error(f"""
+            無法連接到 Ollama 服務。請確認：
+            1. Ollama 服務是否正在運行
+            2. 環境變數是否正確設置
+            - 當前連接 URL: {self.ollama_base_url}
+            """)
             return ["taide-8b"]
+            
         except Exception as e:
             st.error(f"無法獲取模型列表: {str(e)}")
             return ["taide-8b"]
@@ -49,7 +90,11 @@ class ChatApp:
         try:
             headers = {
                 'Content-Type': 'application/json',
+                'ngrok-skip-browser-warning': 'true',
+                'User-Agent': 'Mozilla/5.0'
             }
+            
+            api_url = f"{self.ollama_base_url}/api/generate"
             
             # 優化默認參數
             temperature = st.session_state.get('temperature', 0.5)  # 降低溫度
@@ -58,7 +103,7 @@ class ChatApp:
             with st.chat_message("assistant"):
                 with st.spinner("AI思考中..."):
                     response = requests.post(
-                        "http://localhost:11434/api/generate",
+                        api_url,
                         headers=headers,
                         json={
                             "model": st.session_state.selected_model,
